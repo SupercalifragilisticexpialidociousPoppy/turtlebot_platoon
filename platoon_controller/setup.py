@@ -26,6 +26,7 @@ setup(
         'console_scripts': [
 		'scan_filter = platoon_controller.scan_filter:main',
 		'wall_driver = platoon_controller.wall_driver:main',
+		'distance_controller = platoon_controller.distance_controller:main',
         ],
     },
 )
