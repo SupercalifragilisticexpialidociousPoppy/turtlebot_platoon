@@ -1,3 +1,6 @@
+from glob import glob
+import os
+
 from setuptools import find_packages, setup
 
 package_name = 'platoon_controller'
@@ -10,6 +13,10 @@ setup(
         ('share/ament_index/resource_index/packages',
             ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
+        (os.path.join('share', package_name, 'launch'),
+            glob('launch/*.launch.py')),
+        (os.path.join('share', package_name, 'models'),
+            glob('models/*.sdf')),
     ],
     install_requires=['setuptools'],
     zip_safe=True,
@@ -24,9 +31,10 @@ setup(
     },
     entry_points={
         'console_scripts': [
-		'scan_filter = platoon_controller.scan_filter:main',
-		'wall_driver = platoon_controller.wall_driver:main',
-		'distance_controller = platoon_controller.distance_controller:main',
+            'scan_filter = platoon_controller.scan_filter:main',
+            'wall_driver = platoon_controller.wall_driver:main',
+            'distance_controller = platoon_controller.distance_controller:main',
+            'platoon_follower = platoon_controller.platoon_follower:main',
         ],
     },
 )

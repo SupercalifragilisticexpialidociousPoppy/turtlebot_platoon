@@ -27,7 +27,6 @@ Publishes
 """
 
 import math
-from statistics import median
 
 import rclpy
 from rclpy.node import Node
@@ -36,16 +35,11 @@ from rclpy.qos import qos_profile_sensor_data
 from geometry_msgs.msg import PointStamped
 from sensor_msgs.msg import LaserScan
 
-
-def normalize_angle(angle):
-    """Wrap any angle into the range (-pi, +pi].
-
-    The TurtleBot3 LDS reports angle_min = 0.0 and angle_max = 2*pi, so beams
-    to the robot's RIGHT arrive as values near 6.28, not as negatives. Without
-    this wrap, a symmetric test like `-15deg <= angle <= +15deg` silently keeps
-    only the left half of the forward cone.
-    """
-    return math.atan2(math.sin(angle), math.cos(angle))
+from platoon_controller.control_math import (
+    clamp,
+    extract_sector_hits,
+    locate_target_cluster,
+)
 
 
 class ScanFilter(Node):
@@ -63,6 +57,9 @@ class ScanFilter(Node):
         self.declare_parameter('min_cluster_points', 3)
         self.declare_parameter('ema_alpha', 0.4)
         self.declare_parameter('coast_frames', 5)
+        self.declare_parameter('track_bearing', True)
+        self.declare_parameter('max_track_angle_deg', 60.0)
+        self.declare_parameter('max_jump_distance', 0.45)
 
         self.half_angle = math.radians(
             self.get_parameter('sector_half_angle_deg').value)
@@ -71,6 +68,10 @@ class ScanFilter(Node):
         self.min_points = self.get_parameter('min_cluster_points').value
         self.alpha = self.get_parameter('ema_alpha').value
         self.coast_frames = self.get_parameter('coast_frames').value
+        self.track_bearing = self.get_parameter('track_bearing').value
+        self.max_track_angle = math.radians(
+            self.get_parameter('max_track_angle_deg').value)
+        self.max_jump = self.get_parameter('max_jump_distance').value
 
         # --- Tracker state -------------------------------------------------
         self.distance = None     # smoothed range to the leading object (m)
@@ -82,13 +83,14 @@ class ScanFilter(Node):
         # receive from either a BEST_EFFORT or a RELIABLE publisher, so this
         # one profile works in Gazebo AND on the real LDS driver unchanged.
         # A RELIABLE subscriber would get nothing from the real robot.
+        # Relative topic names allow multi-robot namespacing (e.g. /tb3_2).
         self.create_subscription(
-            LaserScan, '/scan', self.scan_callback, qos_profile_sensor_data)
+            LaserScan, 'scan', self.scan_callback, qos_profile_sensor_data)
 
         self.target_pub = self.create_publisher(
-            PointStamped, '/platoon/target', 10)
+            PointStamped, 'platoon/target', 10)
         self.debug_pub = self.create_publisher(
-            LaserScan, '/platoon/scan_filtered', 10)
+            LaserScan, 'platoon/scan_filtered', 10)
 
         self.get_logger().info(
             f'Scan filter up. Sector +/-'
@@ -99,29 +101,24 @@ class ScanFilter(Node):
     # ----------------------------------------------------------------------
     # Stage 1: angular window + validity gate
     # ----------------------------------------------------------------------
+    def get_search_center(self):
+        """Center the sector on the locked bearing to hold lock in turns."""
+        if not self.track_bearing or self.bearing is None:
+            return 0.0
+        return clamp(self.bearing, -self.max_track_angle, self.max_track_angle)
+
     def extract_sector(self, msg):
         """Return [(index, angle, range)] for valid beams inside the window."""
-        hits = []
-
-        # Gazebo marks no-return beams as +inf; some builds use 0.0 instead.
-        # Clamping the floor to range_min catches both, plus any beam that
-        # reads closer than the sensor is physically able to resolve.
-        near = max(msg.range_min, 0.02)
-        far = min(msg.range_max, self.max_range)
-
-        for i, r in enumerate(msg.ranges):
-            angle = normalize_angle(msg.angle_min + i * msg.angle_increment)
-
-            if abs(angle) > self.half_angle:
-                continue
-            if not math.isfinite(r):
-                continue
-            if r < near or r > far:
-                continue
-
-            hits.append((i, angle, r))
-
-        return hits
+        return extract_sector_hits(
+            ranges=msg.ranges,
+            angle_min=msg.angle_min,
+            angle_increment=msg.angle_increment,
+            range_min=msg.range_min,
+            range_max=msg.range_max,
+            max_track_range=self.max_range,
+            half_angle=self.half_angle,
+            center_angle=self.get_search_center(),
+        )
 
     # ----------------------------------------------------------------------
     # Stage 2: outlier rejection + target extraction
@@ -139,20 +136,36 @@ class ScanFilter(Node):
         An isolated spike fails the width test and is discarded. A real wall
         at 30 cm spans ~30 beams and sails through.
         """
-        nearest = min(r for _, _, r in hits)
-        face = [(a, r) for _, a, r in hits if r <= nearest + self.cluster_tol]
-
-        if len(face) < self.min_points:
+        result = locate_target_cluster(
+            hits, self.cluster_tol, self.min_points)
+        if result is None:
             return None
 
-        # Median over the face, not mean: immune to a straggler beam that
-        # clipped an edge and came back long.
-        distance = median([r for _, r in face])
+        distance, bearing, face_size = result
 
-        # Centroid of the face gives the angular offset Role 4 needs.
-        bearing = sum(a for a, _ in face) / len(face)
+        # Reject sudden target jumps (e.g. a wall clipping the edge of the
+        # tracking cone) while already locked onto a leader.
+        if (
+            self.max_jump > 0.0
+            and self.distance is not None
+            and self.bearing is not None
+        ):
+            dx = (
+                distance * math.cos(bearing)
+                - self.distance * math.cos(self.bearing)
+            )
+            dy = (
+                distance * math.sin(bearing)
+                - self.distance * math.sin(self.bearing)
+            )
+            if math.hypot(dx, dy) > self.max_jump:
+                self.get_logger().warn(
+                    f'Rejected target jump of {math.hypot(dx, dy):.2f} m',
+                    throttle_duration_sec=1.0,
+                )
+                return None
 
-        return distance, bearing, len(face)
+        return distance, bearing, face_size
 
     # ----------------------------------------------------------------------
     # Stage 3: temporal smoothing + dropout coasting
