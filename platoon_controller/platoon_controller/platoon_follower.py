@@ -24,6 +24,7 @@ from geometry_msgs.msg import PointStamped, Twist
 from platoon_controller.control_math import (
     compute_linear_pd,
     compute_pure_pursuit_steering,
+    rate_limit,
 )
 
 
@@ -46,6 +47,7 @@ class PlatoonFollower(Node):
         self.declare_parameter('blend_speed', 0.08)
         self.declare_parameter('angular_deadband_deg', 1.7)
         self.declare_parameter('max_angular_speed', 1.5)
+        self.declare_parameter('max_angular_accel', 2.0)
         self.declare_parameter('turn_slowdown_gain', 0.5)
         self.declare_parameter('min_speed_scale', 0.35)
 
@@ -68,6 +70,8 @@ class PlatoonFollower(Node):
         self.angular_deadband = math.radians(
             self.get_parameter('angular_deadband_deg').value)
         self.max_angular_speed = self.get_parameter('max_angular_speed').value
+        self.max_angular_accel = self.get_parameter(
+            'max_angular_accel').value
         self.turn_slowdown_gain = self.get_parameter(
             'turn_slowdown_gain').value
         self.min_speed_scale = self.get_parameter('min_speed_scale').value
@@ -183,6 +187,13 @@ class PlatoonFollower(Node):
             turn_slowdown_gain=self.turn_slowdown_gain,
             min_speed_scale=self.min_speed_scale,
         )
+
+        # Limit how fast omega may change. A spinning LiDAR smears its
+        # sweep when the robot rotates mid-scan, so an abrupt omega
+        # corrupts the very bearing that produced it. See rate_limit().
+        angular_z = rate_limit(
+            self.angular_speed, angular_z,
+            self.max_angular_accel, 1.0 / self.rate)
 
         self.linear_speed = linear_x
         self.angular_speed = angular_z

@@ -14,6 +14,37 @@ def clamp(value, low, high):
     return max(low, min(high, value))
 
 
+def rate_limit(current, target, max_rate, dt):
+    """Limit how fast ``current`` may move toward ``target``.
+
+    Returns the new value, moved toward ``target`` by at most
+    ``max_rate * dt``. A non-positive ``max_rate`` or ``dt`` disables the
+    limit and returns ``target`` unchanged.
+
+    Angular velocity is the critical use. The LDS sweeps its 360 beams
+    sequentially over one 0.2 s revolution, so a robot rotating while the
+    scan is taken smears the sweep: at 1.5 rad/s the first and last beams
+    come from headings 17 deg apart, more than half the width of a +-15 deg
+    tracking window. A distorted scan yields a wrong bearing, which commands
+    a larger correction, which distorts the next scan further. Limiting how
+    fast omega may change breaks that loop before it starts.
+
+    Gazebo samples all beams instantaneously, so this failure mode cannot
+    appear in simulation -- only on the real LDS.
+    """
+    if max_rate <= 0.0 or dt <= 0.0:
+        return target
+
+    max_step = max_rate * dt
+    delta = target - current
+
+    if delta > max_step:
+        return current + max_step
+    if delta < -max_step:
+        return current - max_step
+    return target
+
+
 def normalize_angle(angle):
     """Wrap any angle in radians into ``(-pi, +pi]``.
 

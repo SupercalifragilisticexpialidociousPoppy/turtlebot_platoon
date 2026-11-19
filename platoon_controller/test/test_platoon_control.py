@@ -9,6 +9,7 @@ from platoon_controller.control_math import (
     extract_sector_hits,
     locate_target_cluster,
     normalize_angle,
+    rate_limit,
 )
 
 
@@ -194,6 +195,29 @@ class TestScanClustering(unittest.TestCase):
             half_angle=math.radians(15.0),
         )
         self.assertIsNone(locate_target_cluster(hits, 0.10, 3))
+
+
+class TestRateLimit(unittest.TestCase):
+    """Tests for angular acceleration limiting."""
+
+    def test_clips_large_step(self):
+        """A 1.5 rad/s jump is clipped to max_rate * dt."""
+        self.assertAlmostEqual(
+            rate_limit(0.0, 1.5, 2.0, 0.05), 0.10, places=6)
+
+    def test_lands_exactly_without_overshoot(self):
+        """A change smaller than one step reaches the target exactly."""
+        self.assertAlmostEqual(
+            rate_limit(1.45, 1.5, 2.0, 0.05), 1.5, places=6)
+
+    def test_limits_both_directions(self):
+        """Negative targets are limited symmetrically."""
+        self.assertAlmostEqual(
+            rate_limit(0.0, -1.5, 2.0, 0.05), -0.10, places=6)
+
+    def test_zero_rate_disables_limit(self):
+        """A non-positive max_rate passes the target straight through."""
+        self.assertEqual(rate_limit(0.0, 1.5, 0.0, 0.05), 1.5)
 
 
 if __name__ == '__main__':

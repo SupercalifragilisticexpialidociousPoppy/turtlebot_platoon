@@ -8,7 +8,7 @@ if ! command -v colcon >/dev/null 2>&1; then
 fi
 
 echo "==> Building platoon_controller..."
-colcon build --packages-select platoon_controller
+colcon build --symlink-install --packages-select platoon_controller
 
 echo "==> Sourcing install/setup.bash..."
 # shellcheck disable=SC1091
