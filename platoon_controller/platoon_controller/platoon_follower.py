@@ -15,6 +15,11 @@ Publishes
 Live tuning (no restart needed):
     ros2 param set /platoon_follower kp 2.5
     ros2 param set /platoon_follower target_distance 0.45
+
+Hardware with reversed motors (drives backward on +x, e.g. swapped
+DYNAMIXEL IDs):
+    ros2 run platoon_controller platoon_follower --ros-args \
+        -p invert_linear:=true
 """
 
 import math
@@ -59,6 +64,8 @@ class PlatoonFollower(Node):
         'emergency_distance': 'emergency',
         'target_timeout': 'timeout',
         'deriv_alpha': 'deriv_alpha',
+        'invert_linear': 'invert_linear',
+        'invert_angular': 'invert_angular',
     }
 
     def __init__(self):
@@ -85,6 +92,12 @@ class PlatoonFollower(Node):
         # --- Differential-drive limits -------------------------------------
         self.declare_parameter('max_wheel_speed', 0.22)
         self.declare_parameter('wheel_separation', 0.160)
+
+        # --- Hardware direction corrections --------------------------------
+        # Applied only at the output, so every piece of control logic above
+        # stays in the standard REP-103 frame (x forward, +z turns left).
+        self.declare_parameter('invert_linear', False)
+        self.declare_parameter('invert_angular', False)
 
         # --- Safety & logging ----------------------------------------------
         self.declare_parameter('emergency_distance', 0.16)
@@ -217,8 +230,6 @@ class PlatoonFollower(Node):
     # ----------------------------------------------------------------------
     def tick(self):
         """Run one control step and publish Twist to cmd_vel."""
-        cmd = Twist()
-
         # Safety gate 1: no target, or target timed out.
         if self.is_lost():
             if self.tracking:
@@ -226,7 +237,7 @@ class PlatoonFollower(Node):
             self.tracking = False
             self.linear_speed = 0.0
             self.angular_speed = 0.0
-            self.cmd_pub.publish(cmd)
+            self.send(0.0, 0.0)
             self.status()
             return
 
@@ -236,8 +247,7 @@ class PlatoonFollower(Node):
         if self.distance < self.emergency:
             self.linear_speed = -self.max_reverse
             self.angular_speed = 0.0
-            cmd.linear.x = self.linear_speed
-            self.cmd_pub.publish(cmd)
+            self.send(self.linear_speed, 0.0)
             self.get_logger().warn(
                 f'Emergency backoff at {self.distance:.3f} m',
                 throttle_duration_sec=1.0,
@@ -297,9 +307,7 @@ class PlatoonFollower(Node):
 
         self.linear_speed = linear_x
         self.angular_speed = angular_z
-        cmd.linear.x = linear_x
-        cmd.angular.z = angular_z
-        self.cmd_pub.publish(cmd)
+        self.send(linear_x, angular_z)
 
         bearing_deg = math.degrees(bearing)
         self.get_logger().debug(
@@ -314,6 +322,19 @@ class PlatoonFollower(Node):
                 f'{bearing_deg:.3f},{error:.4f},{self.d_filtered:.4f},'
                 f'{linear_x:.4f},{angular_z:.4f}\n'
             )
+
+    # ----------------------------------------------------------------------
+    def send(self, linear, angular):
+        """Publish a velocity command, applying hardware direction flips.
+
+        Every command leaves through here, including the emergency backoff.
+        That matters: on a robot whose motors run backward, an uncorrected
+        backoff would drive the follower INTO the leader it is fleeing.
+        """
+        cmd = Twist()
+        cmd.linear.x = -linear if self.invert_linear else linear
+        cmd.angular.z = -angular if self.invert_angular else angular
+        self.cmd_pub.publish(cmd)
 
     # ----------------------------------------------------------------------
     def status(self, bearing_deg=0.0, error=0.0):
