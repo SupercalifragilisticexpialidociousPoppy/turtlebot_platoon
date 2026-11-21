@@ -7,9 +7,11 @@ from platoon_controller.control_math import (
     compute_linear_pd,
     compute_pure_pursuit_steering,
     extract_sector_hits,
+    fit_wheel_limits,
     locate_target_cluster,
     normalize_angle,
     rate_limit,
+    wheel_speeds,
 )
 
 
@@ -137,6 +139,19 @@ class TestScanClustering(unittest.TestCase):
         """Build a 360-beam 0..2*pi scan array (1 deg resolution)."""
         return [default_range] * 360
 
+    def _hits(self, ranges, center_deg=0.0):
+        """Extract +-15 deg sector hits from a 1-deg LDS-style scan."""
+        return extract_sector_hits(
+            ranges=ranges,
+            angle_min=0.0,
+            angle_increment=math.radians(1.0),
+            range_min=0.12,
+            range_max=3.5,
+            max_track_range=3.0,
+            half_angle=math.radians(15.0),
+            center_angle=math.radians(center_deg),
+        )
+
     def test_extracts_symmetric_window_across_zero(self):
         """Beams at 355 deg (-5 deg) and 5 deg both stay inside +-15 deg."""
         ranges = self._make_scan()
@@ -145,17 +160,7 @@ class TestScanClustering(unittest.TestCase):
         ranges[5] = 0.50
         ranges[30] = 0.40  # outside +-15 deg
 
-        hits = extract_sector_hits(
-            ranges=ranges,
-            angle_min=0.0,
-            angle_increment=math.radians(1.0),
-            range_min=0.12,
-            range_max=3.5,
-            max_track_range=3.0,
-            half_angle=math.radians(15.0),
-            center_angle=0.0,
-        )
-        indices = [idx for idx, _, _ in hits]
+        indices = [idx for idx, _, _ in self._hits(ranges)]
         self.assertEqual(indices, [0, 5, 355])
 
     def test_dynamic_bearing_center_tracks_wide_corner(self):
@@ -164,17 +169,8 @@ class TestScanClustering(unittest.TestCase):
         for deg in (32, 34, 36, 38):
             ranges[deg] = 0.45
 
-        hits = extract_sector_hits(
-            ranges=ranges,
-            angle_min=0.0,
-            angle_increment=math.radians(1.0),
-            range_min=0.12,
-            range_max=3.5,
-            max_track_range=3.0,
-            half_angle=math.radians(15.0),
-            center_angle=math.radians(30.0),
-        )
-        result = locate_target_cluster(hits, 0.10, 3)
+        result = locate_target_cluster(
+            self._hits(ranges, center_deg=30.0), 0.10, 3)
         self.assertIsNotNone(result)
         dist, bearing, count = result
         self.assertAlmostEqual(dist, 0.45, places=6)
@@ -185,16 +181,32 @@ class TestScanClustering(unittest.TestCase):
         """Single close beam fails min_cluster_points width check."""
         ranges = self._make_scan()
         ranges[0] = 0.15  # single spurious floor spike
-        hits = extract_sector_hits(
-            ranges=ranges,
-            angle_min=0.0,
-            angle_increment=math.radians(1.0),
-            range_min=0.12,
-            range_max=3.5,
-            max_track_range=3.0,
-            half_angle=math.radians(15.0),
-        )
-        self.assertIsNone(locate_target_cluster(hits, 0.10, 3))
+        self.assertIsNone(locate_target_cluster(self._hits(ranges), 0.10, 3))
+
+    def test_spike_in_front_of_leader_is_outvoted(self):
+        """A lone near spike must not cost the frame when a leader is there.
+
+        Anchoring on the plain nearest return let one spike discard the
+        whole frame; five in a row declared the target lost. Anchoring on
+        the k-th nearest keeps the lock and ignores the spike.
+        """
+        ranges = self._make_scan()
+        for deg in list(range(0, 6)) + list(range(355, 360)):
+            ranges[deg] = 0.50          # leader, 11 beams
+        ranges[2] = 0.15                # spurious reflection mid-leader
+
+        result = locate_target_cluster(self._hits(ranges), 0.10, 3)
+        self.assertIsNotNone(result)
+        dist, _, count = result
+        self.assertAlmostEqual(dist, 0.50, places=6)
+        self.assertEqual(count, 10)     # the spike beam is excluded
+
+    def test_two_spikes_alone_are_still_rejected(self):
+        """Fewer than min_cluster_points agreeing returns is never a target."""
+        ranges = self._make_scan()
+        ranges[0] = 0.15
+        ranges[1] = 0.16
+        self.assertIsNone(locate_target_cluster(self._hits(ranges), 0.10, 3))
 
 
 class TestRateLimit(unittest.TestCase):
@@ -218,6 +230,36 @@ class TestRateLimit(unittest.TestCase):
     def test_zero_rate_disables_limit(self):
         """A non-positive max_rate passes the target straight through."""
         self.assertEqual(rate_limit(0.0, 1.5, 0.0, 0.05), 1.5)
+
+
+class TestWheelLimits(unittest.TestCase):
+    """Tests for differential-drive per-wheel saturation handling."""
+
+    def test_wheel_speeds_split_correctly(self):
+        """Positive omega (left turn) speeds up the right wheel."""
+        left, right = wheel_speeds(0.10, 1.0, wheel_separation=0.16)
+        self.assertAlmostEqual(left, 0.02, places=6)
+        self.assertAlmostEqual(right, 0.18, places=6)
+
+    def test_command_within_limits_is_unchanged(self):
+        """A command both wheels can execute passes through untouched."""
+        self.assertEqual(fit_wheel_limits(0.10, 0.5), (0.10, 0.5))
+
+    def test_saturating_command_is_scaled_into_range(self):
+        """Full speed plus a turn is scaled until the outer wheel fits."""
+        v, w = fit_wheel_limits(0.22, 1.0, max_wheel_speed=0.22)
+        left, right = wheel_speeds(v, w)
+        self.assertLessEqual(max(abs(left), abs(right)), 0.22 + 1e-9)
+
+    def test_scaling_preserves_path_curvature(self):
+        """omega / v is unchanged, so the robot follows the same arc."""
+        v, w = fit_wheel_limits(0.22, 1.0, max_wheel_speed=0.22)
+        self.assertAlmostEqual(w / v, 1.0 / 0.22, places=6)
+
+    def test_zero_limit_disables_fitting(self):
+        """A non-positive max_wheel_speed turns the fit off."""
+        self.assertEqual(
+            fit_wheel_limits(0.22, 1.5, max_wheel_speed=0.0), (0.22, 1.5))
 
 
 if __name__ == '__main__':

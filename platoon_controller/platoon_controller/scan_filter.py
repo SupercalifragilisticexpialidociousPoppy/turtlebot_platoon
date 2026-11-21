@@ -52,7 +52,7 @@ class ScanFilter(Node):
         #   ros2 run platoon_controller scan_filter --ros-args \
         #       -p sector_half_angle_deg:=20.0 -p ema_alpha:=0.6
         self.declare_parameter('sector_half_angle_deg', 15.0)
-        self.declare_parameter('max_track_range', 3.0)
+        self.declare_parameter('max_track_range', 1.2)
         self.declare_parameter('cluster_tolerance', 0.10)
         self.declare_parameter('min_cluster_points', 3)
         self.declare_parameter('ema_alpha', 0.4)

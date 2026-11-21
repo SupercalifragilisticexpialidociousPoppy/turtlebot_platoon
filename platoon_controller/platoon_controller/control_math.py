@@ -90,20 +90,38 @@ def extract_sector_hits(
 def locate_target_cluster(hits, cluster_tolerance, min_cluster_points):
     """Collapse sector hits into ``(distance, bearing, face_size)`` or None.
 
-    Finds the nearest return, keeps beams within ``cluster_tolerance`` of it
-    (the near face of the leading object), and rejects isolated spikes narrower
-    than ``min_cluster_points``.
+    The anchor is the ``min_cluster_points``-th nearest return, not simply
+    the nearest one. A lone spurious short reading -- a floor reflection, a
+    dust mote, a dropout glitch -- therefore cannot anchor the cluster at
+    all, because it takes that many agreeing returns before a range is even
+    considered. Beams within ``cluster_tolerance`` of the anchor form the
+    near face of the leading object.
+
+    This matters more than it looks. Anchoring on the plain nearest return
+    meant a single spike discarded the whole frame, and five discarded
+    frames in a row declared the target lost -- a one-second dropout caused
+    by one bad beam. Anchoring on the k-th nearest outvotes the spike and
+    keeps tracking through it.
     """
-    if not hits:
+    if len(hits) < min_cluster_points:
         return None
 
-    nearest = min(r for _, _, r in hits)
-    face = [(a, r) for _, a, r in hits if r <= nearest + cluster_tolerance]
+    ordered = sorted(r for _, _, r in hits)
+    anchor = ordered[min_cluster_points - 1]
+
+    # Symmetric band: beams slightly nearer than the anchor belong to the
+    # same face, since the anchor is deliberately not the nearest return.
+    face = [(a, r) for _, a, r in hits
+            if abs(r - anchor) <= cluster_tolerance]
 
     if len(face) < min_cluster_points:
         return None
 
+    # Median over the face, not mean: immune to a straggler beam that
+    # clipped an edge and came back long.
     distance = median([r for _, r in face])
+
+    # Centroid of the face gives the angular offset Role 4 needs.
     bearing = sum(a for a, _ in face) / len(face)
 
     return distance, bearing, len(face)
@@ -185,3 +203,38 @@ def compute_pure_pursuit_steering(
     omega = clamp(omega, -max_angular_speed, max_angular_speed)
 
     return effective_linear, omega, bearing
+
+
+def wheel_speeds(linear, angular, wheel_separation=0.160):
+    """Return ``(left, right)`` wheel speeds in m/s for a differential drive.
+
+    A TurtleBot3 Burger is limited per WHEEL at 0.22 m/s, not on ``v`` and
+    ``omega`` independently. At v = 0.22 any non-zero omega asks the outer
+    wheel for more than it can give; it saturates, the executed arc stops
+    matching the commanded one, and the robot under-turns exactly when it
+    most needs to turn.
+    """
+    half = 0.5 * wheel_separation * angular
+    return linear - half, linear + half
+
+
+def fit_wheel_limits(linear, angular, max_wheel_speed=0.22,
+                     wheel_separation=0.160):
+    """Scale ``(linear, angular)`` together until both wheels are in range.
+
+    Scaling both by the same factor preserves ``omega / v`` and therefore the
+    path curvature, so the robot follows the intended arc more slowly rather
+    than a different arc at the intended speed. Returns the pair unchanged
+    when it already fits.
+    """
+    if max_wheel_speed <= 0.0:
+        return linear, angular
+
+    left, right = wheel_speeds(linear, angular, wheel_separation)
+    worst = max(abs(left), abs(right))
+
+    if worst <= max_wheel_speed:
+        return linear, angular
+
+    scale = max_wheel_speed / worst
+    return linear * scale, angular * scale
