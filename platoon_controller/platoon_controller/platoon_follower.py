@@ -62,6 +62,7 @@ class PlatoonFollower(Node):
         'max_wheel_speed': 'max_wheel_speed',
         'wheel_separation': 'wheel_separation',
         'emergency_distance': 'emergency',
+        'no_turn_distance': 'no_turn_distance',
         'target_timeout': 'timeout',
         'deriv_alpha': 'deriv_alpha',
         'invert_linear': 'invert_linear',
@@ -101,6 +102,7 @@ class PlatoonFollower(Node):
 
         # --- Safety & logging ----------------------------------------------
         self.declare_parameter('emergency_distance', 0.16)
+        self.declare_parameter('no_turn_distance', 0.20)
         self.declare_parameter('target_timeout', 0.6)
         self.declare_parameter('deriv_alpha', 0.3)
         self.declare_parameter('rate', 20.0)
@@ -235,6 +237,12 @@ class PlatoonFollower(Node):
             if self.tracking:
                 self.get_logger().warn('Leader lost -- stopping.')
             self.tracking = False
+            self.target_x = None
+            self.target_y = None
+            self.distance = None
+            self.last_distance = None
+            self.last_stamp = None
+            self.d_filtered = 0.0
             self.linear_speed = 0.0
             self.angular_speed = 0.0
             self.send(0.0, 0.0)
@@ -245,6 +253,8 @@ class PlatoonFollower(Node):
         # Not rate limited -- a collision response should be immediate.
         # Still tracking: the leader is visible, just too close.
         if self.distance < self.emergency:
+            self.tracking = True
+            self.d_filtered *= 0.5
             self.linear_speed = -self.max_reverse
             self.angular_speed = 0.0
             self.send(self.linear_speed, 0.0)
@@ -282,6 +292,7 @@ class PlatoonFollower(Node):
             max_angular_speed=self.max_angular_speed,
             turn_slowdown_gain=self.turn_slowdown_gain,
             min_speed_scale=self.min_speed_scale,
+            no_turn_distance=self.no_turn_distance,
         )
 
         # Scale v and omega together until both wheels are within their

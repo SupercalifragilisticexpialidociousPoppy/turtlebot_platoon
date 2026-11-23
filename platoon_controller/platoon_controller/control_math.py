@@ -127,6 +127,27 @@ def locate_target_cluster(hits, cluster_tolerance, min_cluster_points):
     return distance, bearing, len(face)
 
 
+def compute_search_center(
+    bearing,
+    distance,
+    track_bearing,
+    max_track_angle,
+    close_lock_distance=0.22,
+):
+    """Return the angular center for the LiDAR tracking sector.
+
+    Centers the cone on ``bearing`` during turns so the leader stays locked,
+    except below ``close_lock_distance`` where center LDS beams can drop under
+    ``range_min`` (0.12 m) and leave only edge hits that would walk the cone
+    sideways onto walls.
+    """
+    if not track_bearing or bearing is None:
+        return 0.0
+    if distance is not None and distance < close_lock_distance:
+        return 0.0
+    return clamp(bearing, -max_track_angle, max_track_angle)
+
+
 def compute_linear_pd(
     distance,
     setpoint,
@@ -146,6 +167,11 @@ def compute_linear_pd(
         return 0.0, error, True
 
     raw_speed = kp * error + kd * d_filtered
+    # Damping may slow a fast approach to zero, never drive backward away from
+    # a target that is farther than the setpoint.
+    if error > deadband and raw_speed < 0.0:
+        raw_speed = 0.0
+
     speed = clamp(raw_speed, -max_reverse, max_speed)
     return speed, error, False
 
@@ -160,6 +186,7 @@ def compute_pure_pursuit_steering(
     max_angular_speed=1.5,
     turn_slowdown_gain=0.5,
     min_speed_scale=0.35,
+    no_turn_distance=0.0,
 ):
     """Compute coupled ``(linear_x, angular_z, bearing)`` via Pure Pursuit.
 
@@ -187,7 +214,7 @@ def compute_pure_pursuit_steering(
         scale = max(min_speed_scale, 1.0 - turn_slowdown_gain * abs(bearing))
         effective_linear = linear_speed * scale
 
-    if abs(bearing) < angular_deadband:
+    if distance < no_turn_distance or abs(bearing) < angular_deadband:
         return effective_linear, 0.0, bearing
 
     curvature = (2.0 * y) / (distance * distance)

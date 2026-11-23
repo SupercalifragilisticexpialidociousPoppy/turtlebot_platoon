@@ -36,7 +36,7 @@ from geometry_msgs.msg import PointStamped
 from sensor_msgs.msg import LaserScan
 
 from platoon_controller.control_math import (
-    clamp,
+    compute_search_center,
     extract_sector_hits,
     locate_target_cluster,
 )
@@ -52,13 +52,14 @@ class ScanFilter(Node):
         #   ros2 run platoon_controller scan_filter --ros-args \
         #       -p sector_half_angle_deg:=20.0 -p ema_alpha:=0.6
         self.declare_parameter('sector_half_angle_deg', 15.0)
-        self.declare_parameter('max_track_range', 1.2)
+        self.declare_parameter('max_track_range', 1.6)
         self.declare_parameter('cluster_tolerance', 0.10)
         self.declare_parameter('min_cluster_points', 3)
         self.declare_parameter('ema_alpha', 0.4)
-        self.declare_parameter('coast_frames', 5)
+        self.declare_parameter('coast_frames', 3)
         self.declare_parameter('track_bearing', True)
-        self.declare_parameter('max_track_angle_deg', 60.0)
+        self.declare_parameter('max_track_angle_deg', 40.0)
+        self.declare_parameter('close_lock_distance', 0.22)
         self.declare_parameter('max_jump_distance', 0.45)
 
         self.half_angle = math.radians(
@@ -71,6 +72,8 @@ class ScanFilter(Node):
         self.track_bearing = self.get_parameter('track_bearing').value
         self.max_track_angle = math.radians(
             self.get_parameter('max_track_angle_deg').value)
+        self.close_lock_distance = self.get_parameter(
+            'close_lock_distance').value
         self.max_jump = self.get_parameter('max_jump_distance').value
 
         # --- Tracker state -------------------------------------------------
@@ -103,9 +106,13 @@ class ScanFilter(Node):
     # ----------------------------------------------------------------------
     def get_search_center(self):
         """Center the sector on the locked bearing to hold lock in turns."""
-        if not self.track_bearing or self.bearing is None:
-            return 0.0
-        return clamp(self.bearing, -self.max_track_angle, self.max_track_angle)
+        return compute_search_center(
+            bearing=self.bearing,
+            distance=self.distance,
+            track_bearing=self.track_bearing,
+            max_track_angle=self.max_track_angle,
+            close_lock_distance=self.close_lock_distance,
+        )
 
     def extract_sector(self, msg):
         """Return [(index, angle, range)] for valid beams inside the window."""
@@ -213,7 +220,8 @@ class ScanFilter(Node):
         target = self.locate_target(hits) if hits else None
 
         if target is None:
-            self.handle_miss()
+            if self.handle_miss():
+                self.publish_target(msg.header)
             return
 
         distance, bearing, face_size = target
