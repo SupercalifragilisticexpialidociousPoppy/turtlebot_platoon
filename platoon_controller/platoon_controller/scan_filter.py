@@ -28,18 +28,16 @@ Publishes
 
 import math
 
-import rclpy
-from rclpy.node import Node
-from rclpy.qos import qos_profile_sensor_data
-
 from geometry_msgs.msg import PointStamped
-from sensor_msgs.msg import LaserScan
-
 from platoon_controller.control_math import (
     compute_search_center,
     extract_sector_hits,
     locate_target_cluster,
 )
+import rclpy
+from rclpy.node import Node
+from rclpy.qos import qos_profile_sensor_data
+from sensor_msgs.msg import LaserScan
 
 
 class ScanFilter(Node):

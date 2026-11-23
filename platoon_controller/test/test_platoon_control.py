@@ -303,7 +303,7 @@ class TestWheelLimits(unittest.TestCase):
         self.assertLessEqual(max(abs(left), abs(right)), 0.22 + 1e-9)
 
     def test_scaling_preserves_path_curvature(self):
-        """omega / v is unchanged, so the robot follows the same arc."""
+        """Omega / v is unchanged, so the robot follows the same arc."""
         v, w = fit_wheel_limits(0.22, 1.0, max_wheel_speed=0.22)
         self.assertAlmostEqual(w / v, 1.0 / 0.22, places=6)
 

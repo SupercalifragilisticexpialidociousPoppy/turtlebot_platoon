@@ -25,19 +25,16 @@ DYNAMIXEL IDs):
 import math
 import time
 
-import rclpy
-from rclpy.node import Node
-
-from rcl_interfaces.msg import SetParametersResult
-
 from geometry_msgs.msg import PointStamped, Twist
-
 from platoon_controller.control_math import (
     compute_linear_pd,
     compute_pure_pursuit_steering,
     fit_wheel_limits,
     rate_limit,
 )
+from rcl_interfaces.msg import SetParametersResult
+import rclpy
+from rclpy.node import Node
 
 
 class PlatoonFollower(Node):
@@ -220,7 +217,7 @@ class PlatoonFollower(Node):
         return self.now() - self.last_seen
 
     def is_lost(self):
-        """True when the target is missing, stale, or the clock jumped back.
+        """Return True when the target is missing, stale, or clock jumped.
 
         A negative age means the clock stepped backward mid-run. Treating it
         as fresh would keep the robot driving on an arbitrarily old reading,

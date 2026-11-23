@@ -25,10 +25,9 @@ Publishes
 import math
 import time
 
+from geometry_msgs.msg import PointStamped, Twist
 import rclpy
 from rclpy.node import Node
-
-from geometry_msgs.msg import PointStamped, Twist
 
 
 class DistanceController(Node):
@@ -183,7 +182,7 @@ class DistanceController(Node):
 
     # ----------------------------------------------------------------------
     def stop(self):
-        """Always leave the robot stationary on exit.
+        """Leave the robot stationary on exit.
 
         Without this, Ctrl+C leaves the last non-zero Twist latched and the
         robot keeps driving. On real hardware that is how a TurtleBot ends up
