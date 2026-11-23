@@ -44,6 +44,7 @@ class PlatoonFollower(Node):
     # the live-update callback, so the two can never drift apart.
     PARAM_ATTRS = {
         'target_distance': 'setpoint',
+        'reverse_distance': 'reverse_distance',
         'kp': 'kp',
         'kd': 'kd',
         'max_speed': 'max_speed',
@@ -71,6 +72,7 @@ class PlatoonFollower(Node):
 
         # --- Linear PD parameters (Role 3) ---------------------------------
         self.declare_parameter('target_distance', 0.30)
+        self.declare_parameter('reverse_distance', 0.20)
         self.declare_parameter('kp', 2.0)
         self.declare_parameter('kd', 0.5)
         self.declare_parameter('max_speed', 0.22)
@@ -275,6 +277,7 @@ class PlatoonFollower(Node):
             deadband=self.deadband,
             max_speed=self.max_speed,
             max_reverse=self.max_reverse,
+            reverse_distance=self.reverse_distance,
         )
         if in_deadband:
             self.d_filtered *= 0.5

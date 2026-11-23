@@ -157,12 +157,33 @@ def compute_linear_pd(
     deadband,
     max_speed,
     max_reverse,
+    reverse_distance=None,
 ):
     """Compute clamped linear velocity from the 1D PD gap law.
 
-    Returns ``(speed, error, in_deadband)``.
+    When ``reverse_distance`` is set below ``setpoint``, distances inside
+    ``[reverse_distance, setpoint]`` stop (hold zone), distances above
+    ``setpoint`` follow forward, and distances below ``reverse_distance``
+    move backward. Returns ``(speed, error, in_deadband)``.
     """
     error = distance - setpoint
+
+    if reverse_distance is not None and reverse_distance < setpoint:
+        if distance < reverse_distance:
+            rev_error = distance - reverse_distance
+            raw_speed = kp * rev_error + kd * d_filtered
+            if raw_speed > 0.0:
+                raw_speed = 0.0
+            return clamp(raw_speed, -max_reverse, 0.0), error, False
+
+        if distance <= setpoint:
+            return 0.0, error, True
+
+        raw_speed = kp * error + kd * d_filtered
+        if raw_speed < 0.0:
+            raw_speed = 0.0
+        return clamp(raw_speed, 0.0, max_speed), error, False
+
     if abs(error) < deadband:
         return 0.0, error, True
 

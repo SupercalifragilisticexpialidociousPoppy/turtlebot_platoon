@@ -34,7 +34,7 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             'max_track_range',
-            default_value='1.6',
+            default_value='1.2',
             description='Maximum LiDAR tracking range in metres.',
         ),
         DeclareLaunchArgument(

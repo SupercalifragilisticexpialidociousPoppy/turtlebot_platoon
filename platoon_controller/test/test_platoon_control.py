@@ -75,6 +75,27 @@ class TestLinearPD(unittest.TestCase):
         self.assertGreater(error, 0.015)
         self.assertEqual(speed, 0.0)
 
+    def test_three_zone_hold_follow_and_reverse(self):
+        """Follow > 0.30 m, stop in [0.20, 0.30] m, reverse < 0.20 m."""
+        fwd, _, in_db_fwd = compute_linear_pd(
+            0.50, 0.30, 0.0, 2.0, 0.5, 0.015, 0.22, 0.08,
+            reverse_distance=0.20,
+        )
+        hold, _, in_db_hold = compute_linear_pd(
+            0.25, 0.30, 0.0, 2.0, 0.5, 0.015, 0.22, 0.08,
+            reverse_distance=0.20,
+        )
+        rev, _, in_db_rev = compute_linear_pd(
+            0.17, 0.30, 0.0, 2.0, 0.5, 0.015, 0.22, 0.08,
+            reverse_distance=0.20,
+        )
+        self.assertFalse(in_db_fwd)
+        self.assertGreater(fwd, 0.0)
+        self.assertTrue(in_db_hold)
+        self.assertEqual(hold, 0.0)
+        self.assertFalse(in_db_rev)
+        self.assertLess(rev, 0.0)
+
 
 class TestPurePursuitSteering(unittest.TestCase):
     """Tests for Pure Pursuit curvature and stationary alignment."""

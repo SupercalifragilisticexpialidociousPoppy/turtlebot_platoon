@@ -50,15 +50,15 @@ class ScanFilter(Node):
         #   ros2 run platoon_controller scan_filter --ros-args \
         #       -p sector_half_angle_deg:=20.0 -p ema_alpha:=0.6
         self.declare_parameter('sector_half_angle_deg', 15.0)
-        self.declare_parameter('max_track_range', 1.6)
+        self.declare_parameter('max_track_range', 1.2)
         self.declare_parameter('cluster_tolerance', 0.10)
         self.declare_parameter('min_cluster_points', 3)
         self.declare_parameter('ema_alpha', 0.4)
         self.declare_parameter('coast_frames', 3)
         self.declare_parameter('track_bearing', True)
         self.declare_parameter('max_track_angle_deg', 40.0)
-        self.declare_parameter('close_lock_distance', 0.22)
-        self.declare_parameter('max_jump_distance', 0.45)
+        self.declare_parameter('close_lock_distance', 0.20)
+        self.declare_parameter('max_jump_distance', 0.75)
 
         self.half_angle = math.radians(
             self.get_parameter('sector_half_angle_deg').value)
@@ -75,9 +75,10 @@ class ScanFilter(Node):
         self.max_jump = self.get_parameter('max_jump_distance').value
 
         # --- Tracker state -------------------------------------------------
-        self.distance = None     # smoothed range to the leading object (m)
-        self.bearing = None      # smoothed angular offset (rad)
-        self.misses = 0          # consecutive frames with no usable target
+        self.distance = None       # smoothed range to the leading object (m)
+        self.bearing = None        # smoothed angular offset (rad)
+        self.misses = 0            # consecutive frames with no usable target
+        self.last_scan_time = None
 
         # --- ROS plumbing --------------------------------------------------
         # qos_profile_sensor_data is BEST_EFFORT. A BEST_EFFORT subscriber can
@@ -212,6 +213,16 @@ class ScanFilter(Node):
     # Main callback
     # ----------------------------------------------------------------------
     def scan_callback(self, msg):
+        now = self.get_clock().now().nanoseconds * 1e-9
+        if (
+            self.last_scan_time is not None
+            and (now - self.last_scan_time > 1.0 or now < self.last_scan_time)
+        ):
+            self.distance = None
+            self.bearing = None
+            self.misses = 0
+        self.last_scan_time = now
+
         hits = self.extract_sector(msg)
         self.publish_debug_scan(msg, hits)
 
