@@ -6,6 +6,7 @@ import unittest
 from platoon_controller.control_math import (
     compute_linear_pd,
     compute_pure_pursuit_steering,
+    compute_search_center,
     extract_sector_hits,
     fit_wheel_limits,
     locate_target_cluster,
@@ -57,6 +58,43 @@ class TestLinearPD(unittest.TestCase):
         self.assertFalse(in_db_rev)
         self.assertAlmostEqual(fwd, 0.22, places=6)
         self.assertAlmostEqual(rev, -0.08, places=6)
+
+    def test_negative_derivative_never_reverses_when_target_is_far(self):
+        """Noisy negative d_filtered slows approach instead of backing up."""
+        speed, error, in_db = compute_linear_pd(
+            distance=0.40,
+            setpoint=0.30,
+            d_filtered=-1.0,
+            kp=2.0,
+            kd=0.5,
+            deadband=0.015,
+            max_speed=0.22,
+            max_reverse=0.08,
+        )
+        self.assertFalse(in_db)
+        self.assertGreater(error, 0.015)
+        self.assertEqual(speed, 0.0)
+
+    def test_three_zone_hold_follow_and_reverse(self):
+        """Follow > 0.30 m, stop in [0.20, 0.30] m, reverse < 0.20 m."""
+        fwd, _, in_db_fwd = compute_linear_pd(
+            0.50, 0.30, 0.0, 2.0, 0.5, 0.015, 0.22, 0.08,
+            reverse_distance=0.20,
+        )
+        hold, _, in_db_hold = compute_linear_pd(
+            0.25, 0.30, 0.0, 2.0, 0.5, 0.015, 0.22, 0.08,
+            reverse_distance=0.20,
+        )
+        rev, _, in_db_rev = compute_linear_pd(
+            0.17, 0.30, 0.0, 2.0, 0.5, 0.015, 0.22, 0.08,
+            reverse_distance=0.20,
+        )
+        self.assertFalse(in_db_fwd)
+        self.assertGreater(fwd, 0.0)
+        self.assertTrue(in_db_hold)
+        self.assertEqual(hold, 0.0)
+        self.assertFalse(in_db_rev)
+        self.assertLess(rev, 0.0)
 
 
 class TestPurePursuitSteering(unittest.TestCase):
@@ -130,6 +168,17 @@ class TestPurePursuitSteering(unittest.TestCase):
         self.assertLess(v_out, 0.20)
         self.assertGreater(v_out, 0.0)
         self.assertGreater(w, 0.0)
+
+    def test_no_turn_distance_suppresses_close_spinning(self):
+        """Below no_turn_distance, robot backs out straight without turning."""
+        v_out, w, _ = compute_pure_pursuit_steering(
+            x=0.14,
+            y=0.10,
+            linear_speed=-0.08,
+            no_turn_distance=0.20,
+        )
+        self.assertEqual(v_out, -0.08)
+        self.assertEqual(w, 0.0)
 
 
 class TestScanClustering(unittest.TestCase):
@@ -208,6 +257,29 @@ class TestScanClustering(unittest.TestCase):
         ranges[1] = 0.16
         self.assertIsNone(locate_target_cluster(self._hits(ranges), 0.10, 3))
 
+    def test_search_center_locks_forward_when_too_close(self):
+        """Close-range tracking keeps cone centered at 0 to prevent walking."""
+        center = compute_search_center(
+            bearing=math.radians(30.0),
+            distance=0.18,
+            track_bearing=True,
+            max_track_angle=math.radians(40.0),
+            close_lock_distance=0.22,
+        )
+        self.assertEqual(center, 0.0)
+
+    def test_search_center_clamps_to_max_track_angle(self):
+        """Locked bearing beyond max_track_angle is clamped."""
+        limit = math.radians(40.0)
+        center = compute_search_center(
+            bearing=math.radians(55.0),
+            distance=0.50,
+            track_bearing=True,
+            max_track_angle=limit,
+            close_lock_distance=0.22,
+        )
+        self.assertAlmostEqual(center, limit, places=6)
+
 
 class TestRateLimit(unittest.TestCase):
     """Tests for angular acceleration limiting."""
@@ -252,7 +324,7 @@ class TestWheelLimits(unittest.TestCase):
         self.assertLessEqual(max(abs(left), abs(right)), 0.22 + 1e-9)
 
     def test_scaling_preserves_path_curvature(self):
-        """omega / v is unchanged, so the robot follows the same arc."""
+        """Omega / v is unchanged, so the robot follows the same arc."""
         v, w = fit_wheel_limits(0.22, 1.0, max_wheel_speed=0.22)
         self.assertAlmostEqual(w / v, 1.0 / 0.22, places=6)
 

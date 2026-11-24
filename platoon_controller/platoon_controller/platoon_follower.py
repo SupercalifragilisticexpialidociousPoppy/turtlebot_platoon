@@ -25,19 +25,16 @@ DYNAMIXEL IDs):
 import math
 import time
 
-import rclpy
-from rclpy.node import Node
-
-from rcl_interfaces.msg import SetParametersResult
-
 from geometry_msgs.msg import PointStamped, Twist
-
 from platoon_controller.control_math import (
     compute_linear_pd,
     compute_pure_pursuit_steering,
     fit_wheel_limits,
     rate_limit,
 )
+from rcl_interfaces.msg import SetParametersResult
+import rclpy
+from rclpy.node import Node
 
 
 class PlatoonFollower(Node):
@@ -47,6 +44,7 @@ class PlatoonFollower(Node):
     # the live-update callback, so the two can never drift apart.
     PARAM_ATTRS = {
         'target_distance': 'setpoint',
+        'reverse_distance': 'reverse_distance',
         'kp': 'kp',
         'kd': 'kd',
         'max_speed': 'max_speed',
@@ -62,6 +60,7 @@ class PlatoonFollower(Node):
         'max_wheel_speed': 'max_wheel_speed',
         'wheel_separation': 'wheel_separation',
         'emergency_distance': 'emergency',
+        'no_turn_distance': 'no_turn_distance',
         'target_timeout': 'timeout',
         'deriv_alpha': 'deriv_alpha',
         'invert_linear': 'invert_linear',
@@ -73,6 +72,7 @@ class PlatoonFollower(Node):
 
         # --- Linear PD parameters (Role 3) ---------------------------------
         self.declare_parameter('target_distance', 0.30)
+        self.declare_parameter('reverse_distance', 0.20)
         self.declare_parameter('kp', 2.0)
         self.declare_parameter('kd', 0.5)
         self.declare_parameter('max_speed', 0.22)
@@ -101,6 +101,7 @@ class PlatoonFollower(Node):
 
         # --- Safety & logging ----------------------------------------------
         self.declare_parameter('emergency_distance', 0.16)
+        self.declare_parameter('no_turn_distance', 0.20)
         self.declare_parameter('target_timeout', 0.6)
         self.declare_parameter('deriv_alpha', 0.3)
         self.declare_parameter('rate', 20.0)
@@ -218,7 +219,7 @@ class PlatoonFollower(Node):
         return self.now() - self.last_seen
 
     def is_lost(self):
-        """True when the target is missing, stale, or the clock jumped back.
+        """Return True when the target is missing, stale, or clock jumped.
 
         A negative age means the clock stepped backward mid-run. Treating it
         as fresh would keep the robot driving on an arbitrarily old reading,
@@ -235,6 +236,12 @@ class PlatoonFollower(Node):
             if self.tracking:
                 self.get_logger().warn('Leader lost -- stopping.')
             self.tracking = False
+            self.target_x = None
+            self.target_y = None
+            self.distance = None
+            self.last_distance = None
+            self.last_stamp = None
+            self.d_filtered = 0.0
             self.linear_speed = 0.0
             self.angular_speed = 0.0
             self.send(0.0, 0.0)
@@ -245,6 +252,8 @@ class PlatoonFollower(Node):
         # Not rate limited -- a collision response should be immediate.
         # Still tracking: the leader is visible, just too close.
         if self.distance < self.emergency:
+            self.tracking = True
+            self.d_filtered *= 0.5
             self.linear_speed = -self.max_reverse
             self.angular_speed = 0.0
             self.send(self.linear_speed, 0.0)
@@ -268,6 +277,7 @@ class PlatoonFollower(Node):
             deadband=self.deadband,
             max_speed=self.max_speed,
             max_reverse=self.max_reverse,
+            reverse_distance=self.reverse_distance,
         )
         if in_deadband:
             self.d_filtered *= 0.5
@@ -282,6 +292,7 @@ class PlatoonFollower(Node):
             max_angular_speed=self.max_angular_speed,
             turn_slowdown_gain=self.turn_slowdown_gain,
             min_speed_scale=self.min_speed_scale,
+            no_turn_distance=self.no_turn_distance,
         )
 
         # Scale v and omega together until both wheels are within their

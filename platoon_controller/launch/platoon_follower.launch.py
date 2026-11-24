@@ -11,6 +11,9 @@ def generate_launch_description():
     namespace = LaunchConfiguration('namespace')
     use_sim_time = LaunchConfiguration('use_sim_time')
     target_distance = LaunchConfiguration('target_distance')
+    max_track_range = LaunchConfiguration('max_track_range')
+    invert_linear = LaunchConfiguration('invert_linear')
+    invert_angular = LaunchConfiguration('invert_angular')
     log_csv = LaunchConfiguration('log_csv')
 
     return LaunchDescription([
@@ -30,6 +33,21 @@ def generate_launch_description():
             description='Desired following gap in metres.',
         ),
         DeclareLaunchArgument(
+            'max_track_range',
+            default_value='1.2',
+            description='Maximum LiDAR tracking range in metres.',
+        ),
+        DeclareLaunchArgument(
+            'invert_linear',
+            default_value='false',
+            description='Flip linear.x sign for reversed drive motors.',
+        ),
+        DeclareLaunchArgument(
+            'invert_angular',
+            default_value='false',
+            description='Flip angular.z sign for reversed steering motors.',
+        ),
+        DeclareLaunchArgument(
             'log_csv',
             default_value='',
             description='Optional CSV output file path for calibration logs.',
@@ -40,7 +58,10 @@ def generate_launch_description():
             namespace=namespace,
             name='scan_filter',
             output='screen',
-            parameters=[{'use_sim_time': use_sim_time}],
+            parameters=[{
+                'use_sim_time': use_sim_time,
+                'max_track_range': max_track_range,
+            }],
         ),
         Node(
             package='platoon_controller',
@@ -51,6 +72,8 @@ def generate_launch_description():
             parameters=[{
                 'use_sim_time': use_sim_time,
                 'target_distance': target_distance,
+                'invert_linear': invert_linear,
+                'invert_angular': invert_angular,
                 'log_csv': log_csv,
             }],
         ),

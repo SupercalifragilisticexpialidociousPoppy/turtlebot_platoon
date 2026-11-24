@@ -28,11 +28,10 @@ Publishes
 
 import random
 
-import rclpy
-from rclpy.node import Node
-
 from geometry_msgs.msg import Twist
 from nav_msgs.msg import Odometry
+import rclpy
+from rclpy.node import Node
 
 
 class WallDriver(Node):
