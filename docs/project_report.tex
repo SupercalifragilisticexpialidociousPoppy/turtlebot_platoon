@@ -1,0 +1,252 @@
+% CS F407 Artificial Intelligence: final project report template.
+% Limit: 2 pages, including everything except references.
+% Do not change the font size, margins or spacing.
+\documentclass[11pt,a4paper,twocolumn]{article}
+
+\usepackage[margin=2cm,columnsep=0.8cm]{geometry}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage{microtype}
+\usepackage{amsmath,amssymb}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{tabularx}
+\usepackage{enumitem}
+\usepackage{titlesec}
+\usepackage[hidelinks]{hyperref}
+
+\titleformat{\section}{\normalsize\bfseries}{\thesection}{0.6em}{}
+\titlespacing*{\section}{0pt}{1.2ex plus 0.3ex}{0.6ex}
+\setlist{nosep,leftmargin=*}
+\setlength{\parskip}{0.3ex}
+
+\newcommand{\coursename}{CS F407 Artificial Intelligence, AY 2026--27 Semester I}
+\newcommand{\teamno}{Team 200 (Team Found)}
+\newcommand{\githuburl}{https://github.com/SupercalifragilisticexpialidociousPoppy/turtlebot_platoon}
+
+
+\begin{document}
+
+\twocolumn[{%
+\begin{center}
+  {\large\bfseries Robot Platoon: LiDAR-Only Leader Following on TurtleBot3 Robots}\\[1ex]
+  \teamno\\
+  Arnav Kulshreshtha (2024ADPS0821G), Mohammad Zaid Agha (2024ADPS0840G), Manas Milind Desai (2023A1PS0098G)\\[0.5ex]
+  {\small \coursename, BITS Pilani, K.K. Birla Goa Campus}\\[1.5ex]
+  \begin{minipage}{0.85\textwidth}
+    \small
+    \centerline{\bfseries Abstract}\vspace{0.5ex}
+    A platoon is a convoy in which each vehicle follows the one ahead at a fixed gap. We
+    built a platoon of TurtleBot3 Burger robots in which every follower is an independent
+    reactive agent: it uses only its own 2D LiDAR, with no communication, cameras or maps,
+    and runs identical code. Each robot isolates the leader in a ±15° window that turns with
+    it, rejects spurious returns with a robust clustering step, holds a 30\,cm gap with a PD
+    controller, and steers with pure pursuit. In closed-loop simulation against a randomly
+    moving target, a gain of $k_p{=}2.0$ kept the worst gap error at 4.1\,cm, inside the
+    ±5\,cm requirement, while $k_p{=}1.5$ failed at 5.4\,cm, as predicted by a steady-state
+    lag analysis. The same code was deployed on physical robots.
+  \end{minipage}
+\end{center}
+\vspace{1.5ex}
+}]
+
+\section{Introduction}
+Platooning lets vehicles travel close together under coordinated control, improving
+throughput in transport and warehouse logistics. Most systems rely on vehicle-to-vehicle
+communication or external tracking. We study the opposite extreme: each robot follows the
+object directly ahead using only on-board sensing, so the same program works on any robot in
+any position in the line.
+
+\textbf{Input:} a 360-beam laser scan at 5\,Hz (ROS \texttt{LaserScan}).
+\textbf{Output:} linear and angular velocity commands (ROS \texttt{Twist}).
+
+\textbf{Contributions:} (i) a LiDAR perception module that tracks a leader through turns and
+is robust to single-beam outliers; (ii) a PD gap controller whose gain is derived from the
+tolerance specification; (iii) a pure-pursuit steering law with actuator-aware limiting; and
+(iv) a Gazebo testbed and a deployment on physical TurtleBot3 robots, with unit tests.
+
+\section{Background and related work}
+Each follower is a \emph{simple reflex agent}~\cite{russell2021aima}: it maps the current
+percept, plus a small internal state (filtered estimates), directly to an action, without a
+world model or planning. For control we use two standard techniques: proportional-derivative
+(PD) feedback for the gap, and pure-pursuit path tracking for steering. A central concern in
+platoons is \emph{string stability}: disturbances must not grow as they pass down the chain.
+The system is built on ROS~2 Humble~\cite{ros2docs} and the ROBOTIS TurtleBot3
+platform~\cite{turtlebot3manual}.
+
+\section{Method}
+Two ROS~2 nodes run on every follower:
+\texttt{scan} $\rightarrow$ \texttt{scan\_filter} $\rightarrow$ \texttt{platoon/target}
+$\rightarrow$ \texttt{platoon\_follower} $\rightarrow$ \texttt{cmd\_vel}.
+Topic names are relative, so robots can be namespaced.
+
+\textbf{Perception.} Beam angles are wrapped to $(-\pi,\pi]$ (the LDS reports $0$ to $2\pi$,
+and without wrapping a $\pm15^\circ$ test keeps only the left half of the cone: 16 of 31
+beams). Beams are kept if they lie within $\pm15^\circ$ of a window centre $c$ and have range
+in $[0.12, 1.2]$\,m. The centre $c$ follows the last bearing (clamped to $\pm40^\circ$) so
+the leader stays in view through turns, and resets to $0$ when the target is lost or closer
+than 0.20\,m (to avoid edge-beam cone drift). Let $r_k$ be the $k$-th smallest range
+($k{=}3$). The leader's \emph{face} is
+$F=\{i : |r_i - r_k| \le 0.10\,\text{m}\}$, accepted if $|F|\ge3$. Then
+\begin{equation}
+  d=\operatorname{median}_{i\in F} r_i,\qquad
+  \beta=\tfrac{1}{|F|}\textstyle\sum_{i\in F}\theta_i .
+\end{equation}
+Anchoring on $r_k$ rather than the nearest return means a single spurious reading cannot
+anchor the cluster. Estimates are smoothed with an exponential moving average
+($\alpha{=}0.4$); a detection more than 0.75\,m from the previous target is rejected as a
+jump to another object; up to 3 missing frames are bridged before the target is declared
+lost; and scan gaps longer than 1.0\,s reset tracker state. The target is published as the
+point $(d\cos\beta, d\sin\beta)$.
+
+\textbf{Gap control (PD).} With setpoint $d^\ast{=}0.30$\,m, reverse threshold
+$d_{\text{rev}}{=}0.20$\,m, and error $e=d-d^\ast$,
+\begin{equation}
+  v = \operatorname{clip}\big(k_p e + k_d \dot{\hat d},\; -0.08,\; 0.22\big)\ \text{m/s},
+\end{equation}
+where $\dot{\hat d}$ is a low-pass-filtered range rate ($\alpha{=}0.3$). On hardware,
+distances in $[0.20, 0.30]$\,m form a hold zone ($v{=}0$); above 0.30\,m the follower
+drives forward ($v\ge0$, preventing noisy derivative reverse on far targets), and below
+0.20\,m it reverses proportionally to $d-0.20$\,m. In the 1D simulation baseline, a symmetric
+$\pm1.5$\,cm deadband is used. For a leader moving at constant speed $v_\ell$, a P
+controller settles at lag $e_{ss}=v_\ell/k_p$. Requiring $e_{ss}\le5$\,cm at
+$v_\ell{=}0.08$\,m/s gives $k_p\ge1.6$; we use $k_p{=}2.0$, $k_d{=}0.5$. We deliberately
+omit an integral term: integral windup while a follower is blocked releases as a surge when
+it is freed, a disturbance that propagates down the platoon.
+
+\textbf{Steering (pure pursuit).} For target $(x,y)$, the arc through it has curvature
+$\kappa=2y/(x^2+y^2)$ and we command $\omega=v\kappa$. At low speed
+$\omega=v\kappa\to0$, so $\omega$ is blended towards $k_a\beta$ ($k_a{=}1.4$) as $v$ drops
+below 0.08\,m/s, keeping the leader centred while stationary. Forward speed is reduced for
+large $|\beta|$, and turning is suppressed below 0.20\,m so close-range backoff runs
+straight.
+
+\textbf{Actuation and safety.} (i) If either wheel speed $v\pm\omega b/2$ ($b{=}0.16$\,m)
+exceeds 0.22\,m/s, $v$ and $\omega$ are scaled down together, preserving the arc.
+(ii) $\omega$ and $v$ are rate limited (2.0\,rad/s$^2$, 0.6\,m/s$^2$): the LiDAR samples its
+beams over one 0.2\,s revolution, so fast rotation smears the scan (17° at 1.5\,rad/s) and
+corrupts the bearing that produced it. (iii) The robot stops if no target arrives for 0.6\,s
+(resetting derivative state) and backs off at $-0.08$\,m/s if closer than 0.16\,m.
+(iv) Gains and motor-direction inversion flags are live-tunable via ROS parameters.
+
+\section{Experimental setup}
+\textbf{Simulation.} Gazebo~11 with ROS~2 Humble in Docker. A $1.0\times0.5$\,m wall moves
+along one axis between 0.6 and 2.5\,m with a seeded random speed profile (up to 0.08\,m/s,
+acceleration-limited to 0.05\,m/s$^2$), so every gain setting faces the same disturbance.
+Gains were first screened in a kinematic closed-loop replay of this profile with a 5\,Hz
+sensor and 2\,mm range noise.
+
+\textbf{Hardware.} TurtleBot3 Burger robots~\cite{turtlebot3manual} (Raspberry~Pi,
+OpenCR, LDS-01 LiDAR at 5\,Hz), running identical code on ROS~2 Humble~\cite{ros2docs}. The
+leader is driven by keyboard teleoperation. Makeshift height extensions were added to the
+TurtleBots to improve target tracking, since all the LiDARs were at the same height.
+
+\textbf{Metrics.} Mean and worst-case absolute gap error after the initial approach (lower is
+better), the fraction of time within $\pm5$\,cm (higher is better), and the number of target
+losses. \textbf{Baselines:} P-only control ($k_d{=}0$), lower gains, and nearest-return
+anchoring.
+
+\section{Results}
+Table~\ref{tab:results} shows the gain screening. The pass/fail boundary matches the
+$k_p\ge1.6$ prediction: $k_p{=}1.5$ fails by 0.4\,cm, $k_p{=}2.0$ passes. Raising $k_p$ to
+3.0 reduces error further, but leaves less stability margin given the 0.2\,s sensor period.
+$k_d$ had little effect in this replay because it models no inertia; on hardware it damps
+overshoot.
+
+\begin{table}[t]
+\centering
+\small
+\begin{tabular}{lccc}
+\toprule
+$k_p$, $k_d$ & Mean & Worst & $\pm5$\,cm \\
+\midrule
+1.0, 0.5 & 3.35 & 7.98 & fail \\
+1.5, 0.0 (P only) & 2.56 & 5.38 & fail \\
+1.5, 0.5 & 2.45 & 5.39 & fail \\
+\textbf{2.0, 0.5 (ours)} & \textbf{2.00} & \textbf{4.12} & \textbf{pass} \\
+3.0, 0.5 & 1.58 & 3.58 & pass \\
+\bottomrule
+\end{tabular}
+\caption{Absolute gap error in cm over a 3-minute seeded run, excluding the first 10\,s
+(lower is better).}
+\label{tab:results}
+\end{table}
+
+\textbf{Perception.} With a flat target at 1.0\,m and one spurious 0.08\,m reading injected,
+nearest-return anchoring discarded the whole frame, whereas $k$-th-nearest anchoring kept the
+lock and reported 1.01\,m from all 31 beams; with no real object, two spikes alone were still
+rejected. The perception and control functions are covered by 30 unit tests that run without
+ROS.
+
+
+\section{Discussion and limitations}
+\textbf{Sim-to-real gaps.} Several problems only appeared on hardware: the scan-smearing
+effect (Gazebo samples all beams at once), a robot whose motors ran in reverse (handled by
+\texttt{invert\_linear}), the sensor being about 9\,cm behind the bumper (the setpoint is
+measured from the LiDAR), and processes from earlier sessions holding the LiDAR's serial port.
+
+\textbf{Failure modes.} Clustering by range alone cannot separate two objects at the same
+distance, such as both posts of a doorway; their mean bearing points at the gap between them.
+A window that follows its target can also drift onto a nearby wall during a turn; the jump
+threshold and close-range forward lock limit this. Pure pursuit with a 30\,cm lookahead gives
+aggressive steering at short range. \textbf{Next steps:} cluster by angular adjacency,
+tighten jump rejection, and add feed-forward from an estimate of the leader's speed to
+remove the steady-state lag without an integral term.
+
+\section{Conclusion}
+A purely reactive, LiDAR-only controller is sufficient for TurtleBot3 platooning: robust
+clustering, a PD gap law with a specification-derived gain, and rate-limited pure pursuit hold
+the gap within tolerance in simulation, and the same code runs unchanged on every robot.
+
+\section*{Individual member contributions}
+{\small
+\begin{tabularx}{\linewidth}{@{}l X@{}}
+\toprule
+Name & Contribution \\
+\midrule
+Arnav Kulshreshtha & Robot assembly, hardware bring-up and calibration (Milestone~1),
+pure-pursuit steering and unified follower node (\texttt{platoon\_follower},
+\texttt{control\_math}), dynamic scan tracking, 3-zone stability fixes, launch/test
+scripts and unit tests, multi-robot deployment and testing, video; Sections 4 and 6. \\
+Mohammad Zaid Agha & Robot assembly and bring-up (Milestone~1), Gazebo testbed
+(Milestone~2), kinematic validation and presentation support; Sections 2 and 5. \\
+Manas Milind Desai & LiDAR scan filter, PD gap controller and Gazebo moving-wall testbed
+(Milestone~2), hardware tuning and safety limits; Sections 1, 3 and 7. \\
+\bottomrule
+\end{tabularx}}
+
+\smallskip
+\noindent All members have read this report and agree with the statement above.
+
+\section*{Generative AI disclosure}
+We used Claude (Anthropic; Claude Opus~5 and Opus~5.5) and Google Antigravity (Gemini) to
+help write and debug the ROS~2 nodes, unit tests and helper scripts, to troubleshoot the
+Docker, Gazebo and robot setup, and to draft and edit this report. We reviewed, tested and
+ran all generated code on simulation and hardware, checked all text, and take full
+responsibility for both. No LLM is part of the method itself.
+
+\section*{Code availability}
+\noindent Code and data:\\
+\url{\githuburl}\\
+The repository is public and its README contains instructions to reproduce the results.
+
+\begin{thebibliography}{9}
+\small
+\bibitem{russell2021aima}
+S.~Russell and P.~Norvig.
+\newblock \emph{Artificial Intelligence: A Modern Approach}, 4th edition.
+\newblock Pearson, 2021.
+
+\bibitem{ros2docs}
+Open Robotics.
+\newblock \emph{ROS~2 Documentation: Humble}.
+\newblock \url{https://docs.ros.org/en/humble/}. Accessed November 2026.
+
+\bibitem{turtlebot3manual}
+ROBOTIS.
+\newblock \emph{TurtleBot3 e-Manual}.
+\newblock \url{https://emanual.robotis.com/docs/en/platform/turtlebot3/overview/}.
+\newblock Accessed November 2026.
+\end{thebibliography}
+
+\end{document}
