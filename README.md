@@ -72,7 +72,7 @@ PYTHONPATH=platoon_controller python3 -m unittest discover -s platoon_controller
    scp -r platoon_controller teamfound@<ROBOT_IP>:~/platoon_ws/src/
    ```
 
-### Step 2: Source Environment & Bring Up TurtleBot3 Hardware (Window 1 per Robot)
+### Step 2: Source Environment & Bring Up TurtleBot3 Hardware (1 Window per Robot)
 Before launching, confirm `~/.bashrc` sets the robot's environment variables (`ROS_DISTRO=humble`, `TURTLEBOT3_MODEL=burger`, `LDS_MODEL=LDS-01`, and that robot's `ROS_DOMAIN_ID`), and clear any orphaned serial/DDS processes from previous sessions:
 ```bash
 pkill -9 -f "hlds_laser_publisher|turtlebot3_ros|robot_state_publisher|scan_filter|platoon_follower" 2>/dev/null || true
